@@ -5,7 +5,7 @@ Executing an application in RAM on an ARM MCU.
 Usually, we write code for a MCU, compile it and burn the generated image(binary, hex file etc.) to the flash memory of the MCU.
 Every time the MCU is powered up or reset, it starts executing code(instructions) from flash memory.
 
-Bedised flash memory, our MCUs also contain RAM memory so the flashed code can load and store computed data.
+Besides flash memory, our MCUs also contain RAM memory so the flashed code can load and store computed data.
 
 A feature that is less used/known/explained in case of ARM MCUs, is their ability to execute code not only from flash memory, but from RAM as well.
 
@@ -86,9 +86,9 @@ reg pc [mrw $pc_initial_addr]
 resume
 ```
 
-## Loading via a bootloader
+## Loading via my bootloader
 
-As an alternative for debugger loading of application into RAM, we can usee a bootloader.
+As an alternative for debugger loading of application into RAM, we can use a bootloader.
 The bootloader will get the user program binary through a communication channel, load it into RAM and execute it.
 This bootloader needs to be flashed into the MCU so that it starts when the MCU resets.
 
@@ -132,6 +132,41 @@ For this it will load the `SP` with the word(4 bytes) value stored at offset 0 o
 
 Then final step is to branch and execute the application. The application's entry point address will be read by the bootloader from the word value stored at offset 4 of application. The address is loaded in the `PC` register, which starts the RAM code execution.
 
+## Loading via STM32 internal bootloader
+
+*Note*: This section is a later addition since the first release of this document.
+
+When I wrote [my bootloader](#loading-via-my-bootloader) I was not aware that STM32 built-in bootloaders are capable of copying code to RAM and jump to its execution. But thanks to reddit people I found out that it can. I was imagining that it only works for flashing.
+
+It turns out that the bootloader I wrote is very similar to the STM32 built-in bootloader.
+
+STM32 devices have an internal bootloader that can be used to transfer a firmware binary in their flash or RAM and start its execution.
+For each STM32 MCU type, in this [application note](https://www.st.com/resource/en/application_note/an2606-introduction-to-system-memory-boot-mode-on-stm32-mcus-stmicroelectronics.pdf) it is documented:
+* how the built-in bootloader can be activated
+* which communication methods are available(UART, CAN, USB etc.)
+* bootloader's RAM usage
+* etc.
+
+For STM32F100 MCUs the communication with the bootloader happens over the UART port according to this [protocol](https://www.st.com/resource/en/application_note/an3155-how-to-use-usart-protocol-in-bootloader-on-stm32-mcus-stmicroelectronics.pdf).
+
+Luckily, developers already wrote the [stm32loader](https://pypi.org/project/stm32loader/) python tool for interacting with the bootloader over UART.
+
+On STM32F100, for the built-in bootloader, the operation mode is:
+* tie pin `Boot0` to logical 1 and `Boot1` to logical 0 to activate it
+* UART port is *USART1* port with pin PA10 as RX and pin PA9 as TX
+* bootloader needs the first 512 bytes of RAM
+
+Since the built-in bootloader needs the first 512 bytes of RAM(exactly as the one written by me), this [RAM partitioning](#ram-partitioning-when-using-the-bootloader) scheme applies for the targeted firmware.
+
+The built-in bootloader can be asked to start code execution which will automatically set `PC` and `SP` registers to the correct values, (again) exactly as the bootloader written by me [does](#jumping-to-the-ram-application).
+
+In order to load an image to 512 bytes RAM offset and start its execution through the built-in bootloader, the following command applies:
+```
+stm32loader -p UART_PORT -f F1 -w FIRMWARE.bin -a 0x20000200 -v -g 0x20000200
+```
+
+Replace `UART_PORT` with the path to your UART port and `FIRMWARE.bin` with the path to the targeted firmware.
+
 ## Interrupts
 
 When an interrupt occurs on the STM32 MCU, the MCU reads from the **IVT**(Interrupt Vector Table) the address of the interrupt handler corresponding to that interrupt.
@@ -146,9 +181,11 @@ The following instruction takes care of rellocating the IVT when an application 
 mww 0xE000ED08 $load_addr
 ```
 
-If we're using the bootloader to load the application to RAM, the IVT rellocation is handled by the provided bootloader code.
+If we're using [my bootloader](#loading-via-my-bootloader) to load the application to RAM, the IVT rellocation is handled by the provided bootloader code.
 
-**Note** Some ARM MCU variants(like Cortex-M0) do not provide the VTOR register. For some variants is optional and for others is mandatory.
+The STM32 [built-in bootloader](#loading-via-stm32-internal-bootloader) doesn't take care of IVT rellocation, so a solution to this problem is to set the **VTOR** register in the application code, before enabling interrupts.
+
+**Note**: Some ARM MCU variants(like Cortex-M0) do not provide the VTOR register. For some variants is optional and for others is mandatory.
 
 # Inside this repo
 
